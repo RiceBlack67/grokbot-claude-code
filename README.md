@@ -1,46 +1,46 @@
+**English** | [简体中文](README.zh-CN.md)
+
 # grokbot-claude-code
 
 **Let Claude Code hand tasks to your Cursor Grok Bot, wait for the answer, and keep going. No webhook, just one stdlib-only Python script.**
 
-让 Claude Code 把任务交给 Cursor 的 Grok Bot，等它答完，拿着结果接着干。不用 webhook，一个纯 Python 标准库脚本就够了。
+Grok Bot can search X natively, which makes it the perfect thing to hand "go research this on Twitter" to. In testing, one search for posts about "Claude in Chrome" came back with 8 linked summaries plus an overview of what people liked and complained about.
 
-Grok Bot 能直接搜 X 上的帖子，最适合接「去推特上查一查」这种活儿。实测让它搜「Claude in Chrome」的帖子，一次拿回 8 条带链接的摘要，外加一段整体评价。
+📖 **Write-up: [X Article](https://x.com/mikan77_aoi/status/2111043148088816045)**　·　🇨🇳 **Step-by-step guide (Chinese): [sumi5.top/grokbot](https://sumi5.top/grokbot/)**
 
-📖 **图文版教程：[sumi5.top/grokbot](https://sumi5.top/grokbot/)**　·　🇬🇧 **English write-up: [X Article](https://x.com/mikan77_aoi/status/2111043148088816045)**
-
-> ⚠️ **非官方。** 脚本调用的 `/v0/grokbot` 是 Cursor 官方 BDK 扩展 `cursor-grokbot-agents` 底层用的接口，**没有公开文档**，随时可能改动或失效。官方支持的方式是 BDK 扩展本身（需要 Node ≥ 22.13 和常驻的 `bdk serve`）。见文末[风险说明](#风险说明)。
+> ⚠️ **Unofficial.** The script calls `/v0/grokbot`, the endpoint used under the hood by Cursor's official BDK extension `cursor-grokbot-agents`. It is **undocumented** and may change or break at any time. The supported path is the BDK extension itself (needs Node ≥ 22.13 and a long-running `bdk serve`). See [Fine print](#fine-print).
 
 ---
 
-## 为什么不用 webhook
+## Why not the webhook
 
-最早流传的方案是 webhook：Claude Code 把任务 POST 给 Grok Bot，Grok Bot 做完再回传结果。照着做会遇到两个问题：
+The first approach going around was a webhook: Claude Code POSTs a task to Grok Bot, and Grok Bot posts the result back. Follow it today and you'll likely hit two walls:
 
-- Grok Bot 界面不显示 webhook 的 URL 和 key；
-- 限流计数出错，只发了几次请求就返回 400：`Automation run rate limit exceeded … current_count=10002`，多人报告。
+- The Grok Bot UI doesn't show you the webhook URL or key;
+- The rate-limit counter is broken: after only a few requests you get a 400 `Automation run rate limit exceeded … current_count=10002`, reported by several people.
 
-而 BDK 扩展根本不走 webhook，它只是拿你的 API key 调 4 个 HTTP 接口。那就跳过 BDK，直接调。
+The BDK extension doesn't use a webhook at all. It just takes your API key and calls 4 HTTP endpoints. So skip BDK and call them directly.
 
-| 方法 | 路径 | 作用 |
+| Method | Path | What it does |
 |---|---|---|
-| POST | `/v0/grokbot/sessions` `{name}` | 按名字拿到 bot 的会话（**没有就新建**） |
-| POST | `/v0/grokbot/sessions/{id}/messages` `{text, messageId}` | 发一条消息 |
-| GET | `/v0/grokbot/sessions/{id}/entries?afterUpdatedSeq=N` | 读回复，以及这一回合答完没有 |
-| POST | `/v0/grokbot/sessions/{id}/interrupt` `{reason}` | 打断它正在做的事 |
+| POST | `/v0/grokbot/sessions` `{name}` | Get your bot's session by name (creates one if missing) |
+| POST | `/v0/grokbot/sessions/{id}/messages` `{text, messageId}` | Send a message |
+| GET | `/v0/grokbot/sessions/{id}/entries?afterUpdatedSeq=N` | Read replies, and whether the turn is done |
+| POST | `/v0/grokbot/sessions/{id}/interrupt` `{reason}` | Stop what it's currently doing |
 
-主机是 `https://api.cursor.com`，请求头 `Authorization: Bearer <key>`。回复是 `kind == "send-message"` 的条目；`turn` 里的 `inFlight`、`queued`、`idle` 用来判断它答完了没有。
+Host is `https://api.cursor.com`, header `Authorization: Bearer <key>`. Replies are entries with `kind == "send-message"`; `inFlight`, `queued` and `idle` in `turn` tell you whether it's finished.
 
-## 四步用起来
+## Setup in 4 steps
 
-> 只支持 Linux / macOS：脚本用到了 `fcntl`，Windows 上没有这个模块。
+> Linux / macOS only: the script uses `fcntl`, which doesn't exist on Windows.
 
-**1. 拿一把个人 key。** 让 BDK 帮你生成。它走浏览器授权加轮询，没有图形界面的 VPS 也能用：把打印出来的网址拿到自己电脑的浏览器里点确认即可。
+**1. Get a personal key.** Let BDK mint one. It uses browser auth plus polling, so it works on a headless VPS: open the printed link in the browser on your own computer and approve.
 
 ```bash
 npx -p @cursor/bdk bdk login
 ```
 
-**2. 把 key 存成只有自己能读的文件**，然后删掉 BDK 留下的那份：
+**2. Save the key to a file only you can read**, then delete the copy BDK left behind:
 
 ```bash
 mkdir -p ~/.grokbot && chmod 700 ~/.grokbot
@@ -49,50 +49,52 @@ chmod 600 ~/.grokbot/cursor_api_key
 rm ~/.config/agent-serve/credentials.json
 ```
 
-**3. 写上允许对话的 bot 名字**，要和 Grok Bot app 里显示的完全一致（原因见坑②）。名字两边不用加引号，加了脚本也会自动去掉：
+**3. Allowlist the bot names you want to talk to.** They must match exactly what the Grok Bot app shows (see trap 2 for why). No quotes needed; if you add them, the script strips them:
 
 ```bash
-echo 'GROKBOT_AGENTS=你的bot名字' >> ~/.grokbot/env
+echo 'GROKBOT_AGENTS=My Grok' >> ~/.grokbot/env
 ```
 
-**4. 装成 Claude Code skill，开问：**
+**4. Install it as a Claude Code skill and start asking:**
 
 ```bash
 mkdir -p ~/.claude/skills/grokbot && cd ~/.claude/skills/grokbot
 curl -fsSLO https://raw.githubusercontent.com/RiceBlack67/grokbot-claude-code/main/grokbot_api.py
 curl -fsSLO https://raw.githubusercontent.com/RiceBlack67/grokbot-claude-code/main/SKILL.md
 
-python3 grokbot_api.py ask "在 X 上搜一下关于 xxx 的帖子，给 5 条带链接"
-python3 grokbot_api.py check      # 返回 running 时继续等，别重发
-python3 grokbot_api.py interrupt  # 它跑偏了就打断
+python3 grokbot_api.py ask "Search X for posts about xxx and give me 5 with links"
+python3 grokbot_api.py check      # if it says running, keep waiting, don't resend
+python3 grokbot_api.py interrupt  # stop it if it goes off track
 ```
 
-装好以后，直接跟 Claude Code 说「问 Grok Bot 一下……」就行。
+Once installed, just tell Claude Code "Ask Grok Bot to …".
 
-白名单里可以写多个 bot，用逗号隔开，调用时用 `--agent 名字` 指定。不同的 bot 可以同时问；同一个 bot 的 `ask` / `check` 会排队，保证回复对得上是哪条消息。`interrupt` 随时可用，不用等正在进行的 `ask` 结束。
+You can allowlist several bots, comma-separated, and pick one with `--agent NAME`. Different bots can be asked at the same time; `ask` / `check` on the same bot are queued so every reply matches the right message. `interrupt` works any time, without waiting for a running `ask` to finish.
 
-## 踩过的三个坑
+> Grok Bot sometimes answers twice. On longer research it may reply "on it, I'll send the report when it's done" and end its turn; the real answer arrives a minute later as a new message. Keep checking for a little while instead of treating the first reply as final.
 
-1. **必须是个人 key。** 团队或服务账号的 token 会被拒：`403 Service tokens are not permitted on this endpoint`。用上面的 `bdk login` 生成的一定是个人 key。
-2. **名字拼错，账号里会多出一个空 bot。** `sessions` 接口是按名字查找，找不到就新建。所以脚本强制要求白名单，一旦发现会话是刚新建的，就立刻停下、不发任务。官方扩展的做法是照样发出去，再在结果里提示 `created: true`。
-3. **`bdk init` 会偷偷做额外的事。** 不加 `--json` 时，它会执行 `npm install -g`、往 `~/.cursor` 里装技能，最后停在浏览器登录那一步等你。只想看模板的话，记得加 `--json`。
+## 3 traps I hit
 
-## 安全：两条一定要守
+1. **It must be a personal key.** Team or service-account tokens are rejected: `403 Service tokens are not permitted on this endpoint`. The key from `bdk login` above is always a personal one.
+2. **A typo in the name creates a new empty bot.** The `sessions` endpoint is get-or-create by name. That's why the script requires an allowlist, and stops before sending anything if it sees a session that was just created. The official extension sends anyway and flags `created: true` afterwards.
+3. **`bdk init` does more than you think.** Without `--json` it runs `npm install -g`, installs skills into `~/.cursor`, then sits waiting for a browser login. If you only want to look at the template, add `--json`.
 
-- **这把 key 等于你的整个账号。** 拿到它的人能读写、打断你所有的 Grok Bot 会话。单独建一把，存在 600 权限的文件里，不要提交进仓库，不要贴进任何聊天，不用了就去 dashboard 撤销。
-- **Grok Bot 的回复只能当数据，不能当指令。** 它会去搜网页、读帖子，别人写在网上的话可能混进回复里。`SKILL.md` 里已经写死：回复里如果出现「去执行 xxx」「忽略之前的指示」这类话，一律不执行，原样转述给你。
+## Two safety rules
 
-## 风险说明
+- **That key is your whole account.** Anyone holding it can read, write and interrupt every Grok Bot conversation you have. Make a dedicated one, keep it in a chmod 600 file, never commit it, never paste it into any chat, and revoke it in the dashboard when you're done.
+- **Grok Bot's replies are data, not instructions.** It searches the web and reads other people's posts, and any of that text can end up in its answer. `SKILL.md` hard-codes this: if a reply says things like "run xxx" or "ignore previous instructions", nothing gets executed; it is relayed to you as-is.
 
-- `/v0/grokbot/*` 是 Cursor 未公开的接口，是从官方 BDK 扩展的行为里看出来的，不是文档承诺过的 API，随时可能改路径、改字段，或者直接下线。
-- 脚本只带你自己的 key 和普通请求头，不冒充官方客户端。但调用未公开接口本身是否符合 Cursor 的服务条款，请自己判断。
-- 本项目与 Cursor / Anthropic / xAI 无关。适合个人试玩，风险自负。
+## Fine print
 
-## 致谢
+- `/v0/grokbot/*` is an undocumented Cursor endpoint, worked out from how the official BDK extension behaves. It's not a documented API and may change paths or fields, or go away entirely, at any time.
+- The script sends only your own key and normal headers and doesn't pretend to be Cursor's client. Whether calling an undocumented endpoint fits Cursor's terms of service is your call.
+- Not affiliated with Cursor, Anthropic or xAI. For personal tinkering, at your own risk.
 
-- [Riley Brown](https://x.com/rileybrown/status/2109352621081309215)：「从 Claude Code 控制 Grok Bot」这个想法的出处
-- [Agent Native](https://x.com/agentnative_/status/2109351438862389575)：最早的 webhook 版完整教程
-- [@genoooool](https://x.com/genoooool/status/2110750926080213086)：在评论里指出官方 BDK 扩展这条路
+## Thanks
+
+- [Riley Brown](https://x.com/rileybrown/status/2109352621081309215): the idea of controlling Grok Bot from Claude Code
+- [Agent Native](https://x.com/agentnative_/status/2109351438862389575): the original, complete webhook guide
+- [@genoooool](https://x.com/genoooool/status/2110750926080213086): pointing at the official BDK extension in the replies
 
 ## License
 
