@@ -64,7 +64,7 @@ def read_env():
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
-                    env[k.strip()] = v.strip()
+                    env[k.strip()] = v.strip().strip('"\'')
     except FileNotFoundError:
         pass
     return env
