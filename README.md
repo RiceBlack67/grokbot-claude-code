@@ -69,7 +69,7 @@ python3 grokbot_api.py interrupt  # 它跑偏了就打断
 
 装好以后，直接跟 Claude Code 说「问 Grok Bot 一下……」就行。
 
-白名单里可以写多个 bot，用逗号隔开，调用时用 `--agent 名字` 指定。注意：所有调用共用一把状态文件锁，一个 bot 还在等回复时，问另一个 bot 会排队，等前一个答完才开始。
+白名单里可以写多个 bot，用逗号隔开，调用时用 `--agent 名字` 指定。不同的 bot 可以同时问；同一个 bot 的 `ask` / `check` 会排队，保证回复对得上是哪条消息。`interrupt` 随时可用，不用等正在进行的 `ask` 结束。
 
 ## 踩过的三个坑
 

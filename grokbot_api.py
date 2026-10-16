@@ -18,6 +18,7 @@ State:     ~/.grokbot/cursor_sessions.json — session id + read cursor per agen
 """
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import sys
@@ -72,7 +73,8 @@ def read_env():
 
 def allowed_agents():
     raw = os.environ.get("GROKBOT_AGENTS") or read_env().get("GROKBOT_AGENTS", "")
-    names = [n.strip() for n in raw.split(",") if n.strip()]
+    names = [n.strip().strip('"\'').strip() for n in raw.split(",")]
+    names = [n for n in names if n]
     if not names:
         fail('set GROKBOT_AGENTS to your bot name(s) exactly as shown in the Grok Bot app, e.g. GROKBOT_AGENTS="My Grok"')
     return names
@@ -134,30 +136,68 @@ def request(method, path, body=None):
         raise ApiError("%s %s failed: %s" % (method, path.split("?")[0], getattr(e, "reason", e)))
 
 
-# ---- state (sessionId + read cursor per agent), file-locked so parallel calls don't race ----
+# ---- state (sessionId + read cursor per agent) ----
+# Two kinds of lock:
+#   * agent_lock(name): held for a whole ask/check on one bot, so replies attribute to the right message.
+#     Different bots don't block each other, and interrupt never takes it.
+#   * the state-file lock: held only for a quick read or read-modify-write of the JSON.
 
-class State:
+def _flock(path):
+    os.makedirs(BASE, mode=0o700, exist_ok=True)
+    f = open(path, "a")
+    fcntl.flock(f, fcntl.LOCK_EX)
+    return f
+
+
+class agent_lock:
+    def __init__(self, name):
+        digest = hashlib.sha1(name.lower().encode()).hexdigest()[:16]
+        self.path = os.path.join(BASE, ".lock-agent-" + digest)
+
     def __enter__(self):
-        os.makedirs(BASE, mode=0o700, exist_ok=True)
-        self.lock = open(STATE_FILE + ".lock", "a")
-        fcntl.flock(self.lock, fcntl.LOCK_EX)
-        try:
-            with open(STATE_FILE, encoding="utf-8") as f:
-                self.data = json.load(f)
-        except (FileNotFoundError, ValueError):
-            self.data = {}
+        self.f = _flock(self.path)
         return self
 
-    def save(self):
+    def __exit__(self, *exc):
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+
+
+def _load():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def load_state():
+    lk = _flock(STATE_FILE + ".lock")
+    try:
+        return _load()
+    finally:
+        fcntl.flock(lk, fcntl.LOCK_UN)
+        lk.close()
+
+
+def save_contact(name, contact):
+    """Merge one agent's entry into the state file without clobbering other agents."""
+    lk = _flock(STATE_FILE + ".lock")
+    try:
+        data = _load()
+        data[name] = contact
         fd, tmp = tempfile.mkstemp(prefix=".sessions-", dir=BASE)
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp, STATE_FILE)
+    finally:
+        fcntl.flock(lk, fcntl.LOCK_UN)
+        lk.close()
 
-    def __exit__(self, *exc):
-        fcntl.flock(self.lock, fcntl.LOCK_UN)
-        self.lock.close()
+
+def find_contact(data, name):
+    return data.get(name) or next((v for k, v in data.items() if k.lower() == name.lower()), None)
 
 
 def collect(session_id, cursor, deadline, confirm_idle):
@@ -194,8 +234,7 @@ def running_note(name, status):
 
 
 def cmd_list(a):
-    with State() as st:
-        known = st.data
+    known = load_state()
     out({"ok": True, "allowed": allowed_agents(),
          "contacted": [{"name": k, "sessionId": v["sessionId"], "lastContactAt": v.get("lastContactAt")}
                        for k, v in known.items()]})
@@ -215,8 +254,8 @@ def cmd_ask(a):
         # get-or-create by name: a name the account doesn't have yet becomes a new empty agent
         s = request("POST", "/v0/grokbot/sessions", {"name": name})
         sid = s["id"]
-        with State() as st:
-            contact = st.data.get(s["name"]) or st.data.get(name)
+        with agent_lock(s["name"]):
+            contact = find_contact(load_state(), s["name"])
             created = (contact is None and s.get("latestUpdatedSeq") == EMPTY_TRANSCRIPT_TAIL
                        and s.get("createdAtMs", 0) >= started_ms - CREATED_WINDOW_MS)
             # an in-flight turn must settle first, or its deliveries would read as this reply
@@ -227,9 +266,8 @@ def cmd_ask(a):
                      % s["name"], earlierReplies=before or None)
             if created:
                 # stop before sending work into a bot that only exists because of a name mismatch
-                st.data[s["name"]] = {"sessionId": sid, "cursor": cur, "createdByUs": True,
-                                      "firstContactAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-                st.save()
+                save_contact(s["name"], {"sessionId": sid, "cursor": cur, "createdByUs": True,
+                                         "firstContactAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
                 fail('No Grok Bot agent named "%s" existed on this account, so an empty one was just created. '
                      'Nothing was sent. Check the name in the Grok Bot app.' % s["name"], created=True, sessionId=sid)
             r = request("POST", "/v0/grokbot/sessions/%s/messages" % sid,
@@ -238,31 +276,32 @@ def cmd_ask(a):
                 fail("harness did not accept the message (delivery: %s)" % r.get("delivery"))
             status, replies, cur = collect(sid, cur, deadline, confirm_idle=True)
             now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            st.data[s["name"]] = {"sessionId": sid, "cursor": cur,
-                                  "firstContactAt": (contact or {}).get("firstContactAt", now), "lastContactAt": now}
-            st.save()
+            save_contact(s["name"], {"sessionId": sid, "cursor": cur,
+                                     "firstContactAt": (contact or {}).get("firstContactAt", now),
+                                     "lastContactAt": now})
     except ApiError as e:
         fail(str(e))
     out({"ok": True, "agent": s["name"], "sessionId": sid, "status": status, "reply": joined(replies),
          "earlierReplies": before or None, "note": running_note(s["name"], status)})
 
 
-def known_contact(st, requested):
+def known_contact(requested):
     name = resolve_agent(requested)
-    c = st.data.get(name) or next((v for k, v in st.data.items() if k.lower() == name.lower()), None)
+    c = find_contact(load_state(), name)
     if c is None:
         fail('You have not asked "%s" anything yet; use ask first.' % name)
     return name, c
 
 
 def cmd_check(a):
+    name = resolve_agent(a.agent)
     try:
-        with State() as st:
-            name, c = known_contact(st, a.agent)
+        with agent_lock(name):
+            # re-read under the agent lock: a parallel call may have moved the cursor
+            name, c = known_contact(name)
             status, replies, cur = collect(c["sessionId"], c["cursor"], time.time() + a.wait, confirm_idle=True)
             c["cursor"] = cur
-            st.data[name] = c
-            st.save()
+            save_contact(name, c)
     except ApiError as e:
         fail(str(e))
     out({"ok": True, "agent": name, "sessionId": c["sessionId"], "status": status, "reply": joined(replies),
@@ -270,8 +309,8 @@ def cmd_check(a):
 
 
 def cmd_interrupt(a):
-    with State() as st:
-        name, c = known_contact(st, a.agent)
+    # deliberately no agent lock: it must work while an ask on the same bot is still waiting
+    name, c = known_contact(a.agent)
     try:
         request("POST", "/v0/grokbot/sessions/%s/interrupt" % c["sessionId"],
                 {"reason": "Interrupted by grokbot_api.py."})
