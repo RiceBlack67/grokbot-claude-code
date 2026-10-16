@@ -32,6 +32,8 @@ Grok Bot 能直接搜 X 上的帖子，最适合接「去推特上查一查」�
 
 ## 四步用起来
 
+> 只支持 Linux / macOS：脚本用到了 `fcntl`，Windows 上没有这个模块。
+
 **1. 拿一把个人 key。** 让 BDK 帮你生成。它走浏览器授权加轮询，没有图形界面的 VPS 也能用：把打印出来的网址拿到自己电脑的浏览器里点确认即可。
 
 ```bash
@@ -47,7 +49,7 @@ chmod 600 ~/.grokbot/cursor_api_key
 rm ~/.config/agent-serve/credentials.json
 ```
 
-**3. 写上允许对话的 bot 名字**，要和 Grok Bot app 里显示的完全一致（原因见坑②）：
+**3. 写上允许对话的 bot 名字**，要和 Grok Bot app 里显示的完全一致（原因见坑②）。名字两边不用加引号，加了脚本也会自动去掉：
 
 ```bash
 echo 'GROKBOT_AGENTS=你的bot名字' >> ~/.grokbot/env
@@ -66,6 +68,8 @@ python3 grokbot_api.py interrupt  # 它跑偏了就打断
 ```
 
 装好以后，直接跟 Claude Code 说「问 Grok Bot 一下……」就行。
+
+白名单里可以写多个 bot，用逗号隔开，调用时用 `--agent 名字` 指定。注意：所有调用共用一把状态文件锁，一个 bot 还在等回复时，问另一个 bot 会排队，等前一个答完才开始。
 
 ## 踩过的三个坑
 
