@@ -6,7 +6,7 @@
 
 Grok Bot 能直接搜 X 上的帖子，最适合接「去推特上查一查」这种活儿。实测让它搜「Claude in Chrome」的帖子，一次拿回 8 条带链接的摘要，外加一段整体评价。
 
-📖 **图文版教程：[sumi5.top/grokbot](https://sumi5.top/grokbot/)**
+📖 **图文版教程：[sumi5.top/grokbot](https://sumi5.top/grokbot/)**　·　🇬🇧 **English write-up: [X Article](https://x.com/mikan77_aoi/status/2111043148088816045)**
 
 > ⚠️ **非官方。** 脚本调用的 `/v0/grokbot` 是 Cursor 官方 BDK 扩展 `cursor-grokbot-agents` 底层用的接口，**没有公开文档**，随时可能改动或失效。官方支持的方式是 BDK 扩展本身（需要 Node ≥ 22.13 和常驻的 `bdk serve`）。见文末[风险说明](#风险说明)。
 
