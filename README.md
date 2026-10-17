@@ -4,6 +4,8 @@
 
 **Let Claude Code hand tasks to your Cursor Grok Bot, wait for the answer, and keep going. No webhook, just one stdlib-only Python script.**
 
+> **Who this is for:** you run Claude Code on a headless machine (VPS, no GUI), so you can't install the Grok Bot desktop app, and you want Claude Code to hand sub-tasks to Grok Bot and get the answer back. If you want the reverse, Grok Bot driving Claude Code, see [the end](#want-the-reverse).
+
 Grok Bot can search X natively, which makes it the perfect thing to hand "go research this on Twitter" to. In testing, one search for posts about "Claude in Chrome" came back with 8 linked summaries plus an overview of what people liked and complained about.
 
 📖 **Write-up: [X Article](https://x.com/mikan77_aoi/status/2111043148088816045)**　·　🇨🇳 **Step-by-step guide (Chinese): [sumi5.top/grokbot](https://sumi5.top/grokbot/)**
@@ -29,6 +31,16 @@ The BDK extension doesn't use a webhook at all. It just takes your API key and c
 | POST | `/v0/grokbot/sessions/{id}/interrupt` `{reason}` | Stop what it's currently doing |
 
 Host is `https://api.cursor.com`, header `Authorization: Bearer <key>`. Replies are entries with `kind == "send-message"`; `inFlight`, `queued` and `idle` in `turn` tell you whether it's finished.
+
+## Why not the other routes?
+
+There are three other ways to connect the two. Each needed something my setup doesn't have:
+
+- **The webhook:** the UI doesn't show the URL or key, and the rate-limit counter returns 400 after a few requests.
+- **Cursor's official BDK extension:** needs Node 22.13+ and a long-running `bdk serve` process. My boxes are headless VPSes on older Node, and I didn't want another daemon.
+- **[grok-bot-cli](https://github.com/ScriptedAlchemy/grok-bot-cli) (community tool):** needs the Grok Bot desktop app installed and signed in on the same machine. My Claude Code runs on a headless VPS with no GUI, so that route was out.
+
+If you run Claude Code on a Mac with the Grok Bot app installed, grok-bot-cli is worth a look: it does more, and you don't manage keys yourself.
 
 ## Setup in 4 steps
 
@@ -89,6 +101,10 @@ You can allowlist several bots, comma-separated, and pick one with `--agent NAME
 - `/v0/grokbot/*` is an undocumented Cursor endpoint, worked out from how the official BDK extension behaves. It's not a documented API and may change paths or fields, or go away entirely, at any time.
 - The script sends only your own key and normal headers and doesn't pretend to be Cursor's client. Whether calling an undocumented endpoint fits Cursor's terms of service is your call.
 - Not affiliated with Cursor, Anthropic or xAI. For personal tinkering, at your own risk.
+
+## Want the reverse?
+
+Grok Bot driving Claude Code is a different job: grok-bot-cli's Claude channel, or ssh + tmux, fits that better.
 
 ## Thanks
 

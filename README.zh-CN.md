@@ -4,6 +4,8 @@
 
 **Let Claude Code hand tasks to your Cursor Grok Bot, wait for the answer, and keep going. No webhook, just one stdlib-only Python script.**
 
+> **适合谁：** 你在没有图形界面的机器（VPS）上跑 Claude Code，装不了 Grok Bot 桌面 App，想让 Claude Code 把子任务交给 Grok Bot、再把答案拿回来。想反过来让 Grok Bot 指挥 Claude Code，[看文末](#想反过来)。
+
 让 Claude Code 把任务交给 Cursor 的 Grok Bot，等它答完，拿着结果接着干。不用 webhook，一个纯 Python 标准库脚本就够了。
 
 Grok Bot 能直接搜 X 上的帖子，最适合接「去推特上查一查」这种活儿。实测让它搜「Claude in Chrome」的帖子，一次拿回 8 条带链接的摘要，外加一段整体评价。
@@ -31,6 +33,16 @@ Grok Bot 能直接搜 X 上的帖子，最适合接「去推特上查一查」�
 | POST | `/v0/grokbot/sessions/{id}/interrupt` `{reason}` | 打断它正在做的事 |
 
 主机是 `https://api.cursor.com`，请求头 `Authorization: Bearer <key>`。回复是 `kind == "send-message"` 的条目；`turn` 里的 `inFlight`、`queued`、`idle` 用来判断它答完了没有。
+
+## 为什么不走其他路线
+
+把两边连起来还有三种办法，但每一种都需要我这边没有的东西：
+
+- **webhook**：界面不显示 URL 和 key，限流计数出错，几次请求就返回 400。
+- **Cursor 官方 BDK 扩展**：需要 Node 22.13 以上，外加一个常驻的 `bdk serve` 进程。我的机器是没有图形界面的 VPS，Node 版本较旧，也不想再多养一个常驻进程。
+- **[grok-bot-cli](https://github.com/ScriptedAlchemy/grok-bot-cli)（社区工具）**：需要在同一台机器上装好并登录 Grok Bot 桌面 App。我的 Claude Code 跑在没有图形界面的 VPS 上，这条路走不通。
+
+如果你是在装了 Grok Bot App 的 Mac 上用 Claude Code，grok-bot-cli 值得一试：功能更多，也不用自己管理 key。
 
 ## 四步用起来
 
@@ -89,6 +101,10 @@ python3 grokbot_api.py interrupt  # 它跑偏了就打断
 - `/v0/grokbot/*` 是 Cursor 未公开的接口，是从官方 BDK 扩展的行为里看出来的，不是文档承诺过的 API，随时可能改路径、改字段，或者直接下线。
 - 脚本只带你自己的 key 和普通请求头，不冒充官方客户端。但调用未公开接口本身是否符合 Cursor 的服务条款，请自己判断。
 - 本项目与 Cursor / Anthropic / xAI 无关。适合个人试玩，风险自负。
+
+## 想反过来
+
+想让 Grok Bot 指挥 Claude Code？那是另一件事：用 grok-bot-cli 的 Claude 通道，或者 ssh 加 tmux，会更合适。
 
 ## 致谢
 
